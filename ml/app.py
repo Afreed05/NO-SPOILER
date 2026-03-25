@@ -143,7 +143,7 @@ def optimize():
     # ----------------------------------------
     windows = []
 
-    for i in range(4):
+    for i in range(6): # 6 windows = next 36 hours, every 6 hours
         window_dt   = start_dt + timedelta(hours=i * 6)
         hour        = window_dt.hour
 
@@ -177,17 +177,19 @@ def optimize():
     best_window = min(windows, key=lambda x: x['spoilage_percent'])
 
     # Savings = first window loss - best window loss
-    savings = round(windows[0]['loss_rupees'] - best_window['loss_rupees'], 2)
+    worst_window = max(windows, key=lambda x: x['spoilage_percent'])
+    savings = round(worst_window['loss_rupees'] - best_window['loss_rupees'], 2)
     if savings < 0:
-        savings = 0  # agar selected time hi best hai
+        savings = 0
 
     return jsonify({
         "crop":             crop,
         "quantity_kg":      quantity_kg,
         "all_windows":      windows,
         "best_window":      best_window,
+        "worst_window":     worst_window,
         "savings_rupees":   savings,
-        "recommendation":   f"Dispatch at {best_window['window']} — only {best_window['spoilage_percent']}% spoilage"
+        "recommendation":   f"Dispatch at {best_window['window']} — save ₹{savings} vs worst time"
     })
 
 if __name__ == '__main__':

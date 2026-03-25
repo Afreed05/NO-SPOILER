@@ -1,8 +1,7 @@
 // ============================================================
-// ProfitCalculator.jsx — Fixed Version
-// Driver selected hona mandatory hai
-// Real revenue range from mandiPrices
-// Real transport cost from driver's ratePerKm
+// ProfitCalculator.jsx — Fixed
+// Bug fix: driver.name → selectedDriver.name
+// Bug fix: subtitle crash when no driver selected
 // ============================================================
 
 export default function ProfitCalculator({
@@ -11,19 +10,12 @@ export default function ProfitCalculator({
   mandiPrices, onClose
 }) {
 
-  // ── Calculations ──────────────────────────────────────────
-  // Driver optional hai
-// Agar selected nahi hai toh default rate use karo
-
   const distanceKm    = riskData?.route?.distance_km || 150
-const ratePerKm     = selectedDriver?.ratePerKm || 12
-const driverName    = selectedDriver?.name || 'Estimated (₹12/km)'
-const transportCost = Math.round(distanceKm * ratePerKm)
-
-
+  const ratePerKm     = selectedDriver?.ratePerKm || 12
+  const driverName    = selectedDriver?.name || 'Estimated (₹12/km)'
+  const transportCost = Math.round(distanceKm * ratePerKm)
   const labourCost    = selectedLabour ? (selectedLabour.ratePerDay || 500) : 0
 
-  // Best window spoilage loss
   const bestWindow    = riskData?.prediction?.best_window
   const spoilageLoss  = Math.round(bestWindow?.loss_rupees || 0)
   const spoilagePct   = bestWindow?.spoilage_percent || 0
@@ -37,17 +29,16 @@ const transportCost = Math.round(distanceKm * ratePerKm)
     maxPrice = Math.max(...allPrices)
   }
 
-  const effectiveQty  = quantity * (1 - spoilagePct / 100)
-  const revenueMin    = Math.round(effectiveQty * minPrice)
-  const revenueMax    = Math.round(effectiveQty * maxPrice)
-  const totalCost     = transportCost + labourCost + spoilageLoss
-  const profitMin     = revenueMin - totalCost
-  const profitMax     = revenueMax - totalCost
-  const isProfit      = profitMax > 0
+  const effectiveQty = quantity * (1 - spoilagePct / 100)
+  const revenueMin   = Math.round(effectiveQty * minPrice)
+  const revenueMax   = Math.round(effectiveQty * maxPrice)
+  const totalCost    = transportCost + labourCost + spoilageLoss
+  const profitMin    = revenueMin - totalCost
+  const profitMax    = revenueMax - totalCost
+  const isProfit     = profitMax > 0
 
-  // If farmer dispatches at best time vs worst time
-  const worstWindow   = riskData?.prediction?.all_windows?.[0]
-  const extraSavings  = worstWindow
+  const worstWindow  = riskData?.prediction?.all_windows?.[0]
+  const extraSavings = worstWindow
     ? Math.round((worstWindow.loss_rupees || 0) - (bestWindow?.loss_rupees || 0))
     : 0
 
@@ -58,8 +49,9 @@ const transportCost = Math.round(distanceKm * ratePerKm)
       <div style={s.header}>
         <div>
           <div style={s.title}>📊 Profit Calculator</div>
+          {/* FIX: driverName use karo — never crashes */}
           <div style={s.subtitle}>
-            {quantity}kg · {selectedDriver.name} · {distanceKm}km route
+            {quantity}kg · {driverName} · {distanceKm}km route
           </div>
         </div>
         <button onClick={onClose} style={s.closeBtn}>✕</button>
@@ -69,8 +61,9 @@ const transportCost = Math.round(distanceKm * ratePerKm)
       <div style={s.infoRow}>
         <div style={s.infoChip}>
           <span style={{ color: '#93c5fd', fontSize: 11, fontWeight: 600 }}>DRIVER</span>
+          {/* FIX: selectedDriver.name — not driver.name */}
           <span style={{ color: '#f4f4f5', fontWeight: 700 }}>
-            {driver.name} · ₹{ratePerKm}/km
+            {driverName} · ₹{ratePerKm}/km
           </span>
         </div>
         <div style={s.infoChip}>
@@ -85,7 +78,7 @@ const transportCost = Math.round(distanceKm * ratePerKm)
       <div style={s.breakdown}>
         <Row
           label="💰 Revenue Range"
-          sub={`${Math.round(effectiveQty)}kg sold × ₹${minPrice}–₹${maxPrice}/kg (after spoilage)`}
+          sub={`${Math.round(effectiveQty)}kg × ₹${minPrice}–₹${maxPrice}/kg (after spoilage)`}
           value={`+₹${revenueMin} → ₹${revenueMax}`}
           color="#4ade80"
         />
@@ -109,30 +102,26 @@ const transportCost = Math.round(distanceKm * ratePerKm)
         />
       </div>
 
-      {/* Divider */}
       <div style={s.divider} />
 
-      {/* Final Profit */}
+      {/* Final Profit — BIG */}
       <div style={{
         ...s.profitBox,
         background: isProfit ? 'rgba(74,222,128,0.07)' : 'rgba(248,113,113,0.07)',
         border: `2px solid ${isProfit ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'}`,
       }}>
         <div style={s.profitLabel}>NET PROFIT RANGE</div>
-        <div style={{
-          ...s.profitValue,
-          color: isProfit ? '#4ade80' : '#f87171'
-        }}>
+        <div style={{ ...s.profitValue, color: isProfit ? '#4ade80' : '#f87171' }}>
           ₹{profitMin} → ₹{profitMax}
         </div>
         <div style={s.profitHint}>
           {isProfit
-            ? `Based on mandi price range ₹${minPrice}–₹${maxPrice}/kg`
+            ? `Mandi price range ₹${minPrice}–₹${maxPrice}/kg`
             : 'Consider best dispatch time to improve profit'}
         </div>
       </div>
 
-      {/* Best time upgrade tip */}
+      {/* Best time tip */}
       {extraSavings > 100 && (
         <div style={s.tipBox}>
           <span style={{ fontSize: 20 }}>💡</span>
@@ -153,7 +142,6 @@ const transportCost = Math.round(distanceKm * ratePerKm)
   )
 }
 
-// Reusable row component
 function Row({ label, sub, value, color }) {
   return (
     <div style={{
@@ -183,38 +171,24 @@ const s = {
   },
   title: { fontSize: 17, fontWeight: 700, color: '#f4f4f5', letterSpacing: '-0.02em' },
   subtitle: { fontSize: 12, color: '#52525b', marginTop: 3 },
-  closeBtn: {
-    background: 'none', border: 'none',
-    color: '#52525b', cursor: 'pointer', fontSize: 18,
-  },
-  infoRow: {
-    display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap',
-  },
+  closeBtn: { background: 'none', border: 'none', color: '#52525b', cursor: 'pointer', fontSize: 18 },
+  infoRow: { display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' },
   infoChip: {
-    background: 'rgba(255,255,255,0.04)',
-    border: '1px solid rgba(255,255,255,0.08)',
+    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
     borderRadius: 10, padding: '10px 14px',
     display: 'flex', flexDirection: 'column', gap: 4, flex: 1,
   },
   breakdown: { marginBottom: 20 },
   divider: { borderTop: '1px solid rgba(255,255,255,0.07)', marginBottom: 20 },
-  profitBox: {
-    borderRadius: 16, padding: 24,
-    textAlign: 'center', marginBottom: 16,
-  },
+  profitBox: { borderRadius: 16, padding: 24, textAlign: 'center', marginBottom: 16 },
   profitLabel: {
-    fontSize: 11, color: '#52525b',
-    fontWeight: 600, textTransform: 'uppercase',
-    letterSpacing: '0.06em', marginBottom: 8,
+    fontSize: 11, color: '#52525b', fontWeight: 600,
+    textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8,
   },
-  profitValue: {
-    fontSize: 36, fontWeight: 800,
-    letterSpacing: '-0.03em',
-  },
+  profitValue: { fontSize: 36, fontWeight: 800, letterSpacing: '-0.03em' },
   profitHint: { fontSize: 13, color: '#52525b', marginTop: 6 },
   tipBox: {
-    background: 'rgba(167,139,250,0.07)',
-    border: '1px solid rgba(167,139,250,0.2)',
+    background: 'rgba(167,139,250,0.07)', border: '1px solid rgba(167,139,250,0.2)',
     borderRadius: 12, padding: '14px 16px',
     display: 'flex', alignItems: 'center', gap: 12,
   },
