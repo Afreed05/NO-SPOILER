@@ -5,6 +5,14 @@
 > data-driven dispatch decisions, connect with transport providers,labours 
 > and maximize their post-harvest income.
 
+
+![No Spoilers Banner](https://img.shields.io/badge/No%20Spoilers-Agricultural%20AI-22c55e?style=for-the-badge&logo=leaf)
+![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)
+![Node.js](https://img.shields.io/badge/Node.js-20-339933?style=flat-square&logo=node.js)
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?style=flat-square&logo=python)
+![Firebase](https://img.shields.io/badge/Firebase-Firestore-FFCA28?style=flat-square&logo=firebase)
+![XGBoost](https://img.shields.io/badge/ML-XGBoost-FF6600?style=flat-square)
+
 ## 🚨 The Problem
 
 India loses **₹92,000 crore annually** in post-harvest agricultural waste.
