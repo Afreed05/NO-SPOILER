@@ -83,9 +83,17 @@ function ProviderDashboard() {
   const [user, setUser] = useState(auth.currentUser)
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u))
-    return () => unsub()
-  }, [])
+  const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    if (currentUser) {
+      // Role Firestore se fetch karo
+      const { getDoc, doc: fsDoc } = await import('firebase/firestore')
+      const userDoc = await getDoc(fsDoc(db, 'users', currentUser.uid))
+      const userData = userDoc.data()
+      setUser({ ...currentUser, role: userData?.role })
+    }
+  })
+  return () => unsubscribe()
+}, [])
 
   useEffect(() => {
     fetchPendingRequests()
@@ -197,12 +205,26 @@ function ProviderDashboard() {
   }
 
   const fetchPendingRequests = async () => {
-    try {
-      const q = query(collection(db, 'requests'), where('status', '==', 'pending'))
-      const snap = await getDocs(q)
-      setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-    } catch (err) { console.error(err) }
-  }
+  try {
+    // Labour bhi provider dashboard use karta hai
+    // Agar labour hai toh sirf apne assigned requests dikhao
+    // Agar provider hai toh saare pending requests dikhao
+    const q = query(
+      collection(db, 'requests'),
+      where('status', '==', 'pending')
+    )
+    const snap = await getDocs(q)
+    const allRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+    // Labour ke liye — sirf wo requests jo unhe assign ki hain
+    // Provider ke liye — saari pending requests
+    if (user?.role === 'labour') {
+      setRequests(allRequests.filter(r => r.labour?.id === user.uid))
+    } else {
+      setRequests(allRequests)
+    }
+  } catch (err) { console.error(err) }
+}
 
   const fetchMyJobs = async () => {
     try {
@@ -216,8 +238,12 @@ function ProviderDashboard() {
     setLoading(true)
     try {
       await updateDoc(doc(db, 'requests', request.id), {
-        status: 'accepted', providerId: user.uid,
-        providerEmail: user.email, acceptedAt: new Date()
+        status: 'accepted',
+        providerId: user.uid,
+        providerEmail: user.email,
+        acceptedAt: new Date(),
+        // Driver status update — snapshot already saved, sirf status update karo
+        'driver.status': 'accepted',
       })
       setSuccessMsg('Job accepted! Route loading...')
       setTimeout(() => setSuccessMsg(''), 4000)
@@ -239,7 +265,15 @@ function ProviderDashboard() {
       const data = response.data
       setRouteInfo({ distance_km: data.route.distance_km, travel_hours: data.route.travel_hours, temperature: data.weather.temperature, crop: job.crop, quantity: job.quantity, pickup: job.pickup, destination: job.destination })
       setActiveJob(job)
-      setRouteCoords([getCoords(job.pickup), getCoords(job.destination)])
+      const geometry = data.route?.geometry
+        if (geometry && geometry.length > 2) {
+            setRouteCoords(geometry)
+        } else {
+          setRouteCoords([
+          data.route?.originCoords || getCoords(job.pickup),
+          data.route?.destCoords   || getCoords(job.destination)
+          ])
+          }     
     } catch (err) {
       setRouteCoords([getCoords(job.pickup), getCoords(job.destination)])
       setActiveJob(job)

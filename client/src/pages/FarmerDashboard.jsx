@@ -216,23 +216,56 @@ function FarmerDashboard() {
     setLoading(true)
     setError('')
     try {
-      await addDoc(collection(db, 'requests'), {
-        farmerId:    user.uid,
-        farmerEmail: user.email,
-        farmerName:  user.email.split('@')[0],
-        crop,
-        quantity:    Number(quantity),
-        pickup,
-        destination: destination || '',
-        status:      'pending',
-        jobType:     'labour',
-        labourPrice: selectedLabour?.ratePerDay || 500,
-        createdAt:   new Date(),
-      })
+         await addDoc(collection(db, 'requests'), {
+          farmerId: user.uid,
+          farmerEmail: user.email,
+          crop,
+          quantity: Number(quantity),
+          pickup,
+          destination,
+          status: 'pending',
+          // Labour dashboard listens specifically for jobType === 'labour'
+          jobType: 'labour',
+          // Used by LabourDashboard UI/earnings
+          labourPrice: selectedLabour?.ratePerDay || 500,
+          // Back-compat: some screens read `price`
+          price: selectedLabour?.ratePerDay || 500,
+
+        // Full driver snapshot — not just ID
+        driver: selectedDriver ? {
+          id: selectedDriver.id,
+          name: selectedDriver.name || '',
+          phone: selectedDriver.phone || '',
+          vehicleNo: selectedDriver.vehicleNo || '',
+          vehicleType: selectedDriver.vehicleType || '',
+          ratePerKm: selectedDriver.ratePerKm || 12,
+          status: 'pending'
+       } : null,
+
+        // Full labour snapshot — not just ID
+        labour: selectedLabour ? {
+          id: selectedLabour.id,
+          name: selectedLabour.name || '',
+          phone: selectedLabour.phone || '',
+          ratePerDay: selectedLabour.ratePerDay || 500,
+          status: 'pending'
+       } : null,
+
+       riskAnalysis: riskData ? {
+        spoilage_percent: riskData.prediction.best_window.spoilage_percent,
+        best_window: riskData.prediction.best_window.window,
+        savings_rupees: riskData.prediction.savings_rupees
+      } : null,
+
+    createdAt: new Date()
+    })
       setSuccess(`Labour request sent to ${selectedLabour?.name}!`)
       setSelectedLabour(null)
       setTimeout(() => setSuccess(''), 4000)
-    } catch (err) { setError('Failed to send labour request') }
+    } catch (err) {
+      console.error('Failed to send labour request:', err)
+      setError('Failed to send labour request')
+    }
     setLoading(false)
   }
 
@@ -789,6 +822,7 @@ function FarmerDashboard() {
                         <span style={s.routeArrow}>→</span>
                         <span style={s.routeTo}>{req.destination}</span>
                       </div>
+                      {/* ML Analysis chips */}
                       {req.riskAnalysis && (
                         <div style={s.requestMlRow}>
                           <span style={s.mlChip}>💰 Saved ₹{req.riskAnalysis.savings_rupees}</span>
@@ -796,6 +830,57 @@ function FarmerDashboard() {
                           <span style={s.mlChip}>🧠 {req.riskAnalysis.spoilage_percent}% spoilage</span>
                         </div>
                       )}
+
+                      {/* Driver details */}
+                      {req.driver ? (                     
+                        <div style={providerRowStyle}>
+                          <span style={providerIconStyle}>🚛</span>
+                          <span style={providerTextStyle}>
+                            <strong>{req.driver.name}</strong>
+                            {req.driver.vehicleNo && ` · ${req.driver.vehicleNo}`}
+                            {req.driver.vehicleType && ` · ${req.driver.vehicleType}`}
+                            {` · ₹${req.driver.ratePerKm}/km`}
+                            {req.driver.phone && (
+                              <a href={`tel:${req.driver.phone}`} style={callBtnStyle}>
+                                📞 Call
+                              </a>
+                            )}
+                          </span>
+                          <span style={{
+                          ...statusChipStyle,
+                          background: req.driver.status === 'accepted'
+                          ? 'rgba(74,222,128,0.12)' : 'rgba(251,191,36,0.12)',
+                          color: req.driver.status === 'accepted' ? '#4ade80' : '#fbbf24',
+                         }}>
+                        {req.driver.status === 'accepted' ? '✓ Confirmed' : '⏳ Pending'}
+                      </span>
+                    </div>
+                    ) : (
+                    <div style={noProviderStyle}>🚛 No driver assigned yet</div>
+                )}
+
+          {/* Labour details */}
+            {req.labour ? (
+              <div style={providerRowStyle}>
+              <span style={providerIconStyle}>💪</span>
+              <span style={providerTextStyle}>
+                <strong>{req.labour.name}</strong>
+                {` · ₹${req.labour.ratePerDay}/day`}
+                {req.labour.phone && (
+                <a href={`tel:${req.labour.phone}`} style={callBtnStyle}>
+                📞 Call
+                </a>
+              )}
+              </span>
+              <span style={{
+                ...statusChipStyle,
+                background: 'rgba(250,204,21,0.1)',
+                color: '#facc15',
+              }}>
+            💪 Labour
+            </span>
+            </div>
+              ) : null}
                     </div>
                   )
                 })}
@@ -881,4 +966,60 @@ const s = {
   emptyIcon: { fontSize: 48, marginBottom: 8 },
   emptyTitle: { fontSize: 18, fontWeight: 700, color: '#f4f4f5' },
   emptySubtitle: { fontSize: 14, color: '#52525b', marginBottom: 8 },
+}
+const providerRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  marginTop: 10,
+  padding: '10px 14px',
+  background: 'rgba(255,255,255,0.03)',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 10,
+  flexWrap: 'wrap',
+}
+
+const providerIconStyle = {
+  fontSize: 16,
+  flexShrink: 0,
+}
+
+const providerTextStyle = {
+  fontSize: 13,
+  color: '#d4d4d8',
+  flex: 1,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const callBtnStyle = {
+  background: 'rgba(74,222,128,0.1)',
+  border: '1px solid rgba(74,222,128,0.2)',
+  color: '#4ade80',
+  borderRadius: 6,
+  padding: '2px 8px',
+  fontSize: 11,
+  fontWeight: 700,
+  textDecoration: 'none',
+  cursor: 'pointer',
+}
+
+const statusChipStyle = {
+  padding: '3px 10px',
+  borderRadius: 99,
+  fontSize: 11,
+  fontWeight: 700,
+  flexShrink: 0,
+}
+
+const noProviderStyle = {
+  fontSize: 12,
+  color: '#3f3f46',
+  marginTop: 8,
+  padding: '8px 12px',
+  background: 'rgba(255,255,255,0.02)',
+  borderRadius: 8,
+  border: '1px dashed rgba(255,255,255,0.06)',
 }

@@ -170,8 +170,11 @@ router.post('/analyze', async (req, res) => {
         description:           weather.description
       },
       route: {
-        distance_km:  route.distance_km,
-        travel_hours: route.travel_hours
+        distance_km:    route.distance_km,
+        travel_hours:   route.travel_hours,
+        geometry:       route.geometry,
+        originCoords:   route.originCoords,
+        destCoords:     route.destCoords,
       },
       prediction: {
         best_window:    mlData.best_window,
