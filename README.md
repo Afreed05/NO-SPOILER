@@ -492,8 +492,14 @@ no-spoilers/
 | Heamanth Gowda -> Testing + Demo 
 
 ---
-
+<div align="center">
 
 **Built with ❤️ for Indian farmers**
 
 *"Every rupee saved from spoilage is a rupee earned without extra work."*
+
+[![GitHub stars](https://img.shields.io/github/stars/yourusername/no-spoilers?style=social)](https://github.com/yourusername/no-spoilers)
+
+</div>
+
+Ye README GitHub pe directly paste karo — README.md file mein. Sab formatting, badges, tables sab render ho jayega. 🚀You are ou
