@@ -8,6 +8,7 @@ import Login from './pages/Login'
 import Signup from './pages/Signup'
 import FarmerDashboard from './pages/FarmerDashboard'
 import ProviderDashboard from './pages/ProviderDashboard'
+import LabourDashboard from './pages/LabourDashboard'
 
 function App() {
   const [user, setUser]       = useState(null)
@@ -60,14 +61,14 @@ function App() {
           !user ? <Login /> :
           role === 'farmer'   ? <Navigate to="/farmer"   replace /> :
           role === 'provider' ? <Navigate to="/provider" replace /> :
-          role === 'labour'   ? <Navigate to="/provider" replace /> :
+          role === 'labour'   ? <Navigate to="/labour" replace /> :
           <Login />
         } />
         <Route path="/signup" element={
           !user ? <Signup /> :
           role === 'farmer'   ? <Navigate to="/farmer"   replace /> :
           role === 'provider' ? <Navigate to="/provider" replace /> :
-          role === 'labour'   ? <Navigate to="/provider" replace /> :
+          role === 'labour'   ? <Navigate to="/labour" replace /> :
           <Signup />
         } />
 
@@ -80,6 +81,11 @@ function App() {
         <Route path="/provider" element={
           user && (role === 'provider' || role === 'labour')
             ? <ProviderDashboard />
+            : <Navigate to="/login" replace />
+        } />
+        <Route path="/labour" element={
+          user && role === 'labour'
+            ? <LabourDashboard />
             : <Navigate to="/login" replace />
         } />
       </Routes>
