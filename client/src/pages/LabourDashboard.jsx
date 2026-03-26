@@ -30,6 +30,7 @@ function LabourDashboard() {
 
   const locationIntervalRef = useRef(null)
   const unsubPendingRef     = useRef(null)  // realtime listener cleanup
+  const unsubMyJobsRef     = useRef(null)  // realtime listener cleanup
   const navigate            = useNavigate()
 
   // ── Auth listener ─────────────────────────────────────────
@@ -44,8 +45,10 @@ function LabourDashboard() {
     fetchProfile()
     fetchMyJobs()
     startPendingJobsListener()   // real-time listener
+    startMyJobsListener()       // real-time listener for earnings updates
     return () => {
       if (unsubPendingRef.current) unsubPendingRef.current()
+      if (unsubMyJobsRef.current) unsubMyJobsRef.current()
     }
   }, [user])
 
@@ -77,7 +80,8 @@ function LabourDashboard() {
     const q = query(
       collection(db, 'requests'),
       where('jobType', '==', 'labour'),
-      where('status',  '==', 'pending')
+      where('status',  '==', 'pending'),
+      where('labour.id', '==', user.uid)
     )
 
     unsubPendingRef.current = onSnapshot(q, (snap) => {
@@ -93,13 +97,28 @@ function LabourDashboard() {
     })
   }
 
+  // ── REAL-TIME listener for my accepted labour jobs ───────
+  const startMyJobsListener = () => {
+    const q = query(
+      collection(db, 'requests'),
+      where('providerId', '==', user.uid),
+      where('jobType', '==', 'labour'),
+      where('labour.id', '==', user.uid)
+    )
+
+    unsubMyJobsRef.current = onSnapshot(q, (snap) => {
+      setMyJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    })
+  }
+
   // ── Fetch my accepted/completed jobs ──────────────────────
   const fetchMyJobs = async () => {
     try {
       const q = query(
         collection(db, 'requests'),
         where('providerId', '==', user.uid),
-        where('jobType',    '==', 'labour')
+        where('jobType',    '==', 'labour'),
+        where('labour.id',   '==', user.uid)
       )
       const snap = await getDocs(q)
       setMyJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })))
@@ -207,6 +226,8 @@ function LabourDashboard() {
         providerName:    profile?.name || user.email,
         providerPhone:   profile?.phone || '',
         acceptedAt:      new Date(),
+        // Keep labour status in sync for the farmer view
+        'labour.status': 'accepted',
       })
       showSuccess('Job accepted!')
       fetchMyJobs()
@@ -234,6 +255,7 @@ function LabourDashboard() {
       await updateDoc(doc(db, 'requests', job.id), {
         status:      'in_progress',
         startedAt:   new Date(),
+        'labour.status': 'in_progress',
       })
       showSuccess('Work started!')
       fetchMyJobs()
@@ -246,10 +268,12 @@ function LabourDashboard() {
     setActionLoading(job.id)
     try {
       await updateDoc(doc(db, 'requests', job.id), {
-        status:      'completed',
-        completedAt: new Date(),
+        // 2-step completion: labour marks work done, farmer confirms to finalize earnings
+        status:      'awaiting_farmer_confirmation',
+        labourWorkDoneAt: new Date(),
+        'labour.status': 'work_done',
       })
-      showSuccess(`Job completed! ₹${job.labourPrice || job.price || 0} earned`)
+      showSuccess('Work marked done. Waiting for farmer confirmation...')
       fetchMyJobs()
     } catch (err) { console.error(err) }
     setActionLoading('')
@@ -475,7 +499,13 @@ function LabourDashboard() {
                           <span style={s.qtyBadge}>{job.quantity || '—'} kg</span>
                         </div>
                         <span style={{ background: st.bg, color: st.color, border: `1px solid ${st.border}`, padding: '4px 12px', borderRadius: 99, fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>
-                          {job.status === 'in_progress' ? '🔧 In Progress' : job.status === 'completed' ? '✅ Completed' : '⏳ Accepted'}
+                          {job.status === 'in_progress'
+                            ? '🔧 In Progress'
+                            : job.status === 'awaiting_farmer_confirmation'
+                              ? '⏳ Waiting Farmer'
+                              : job.status === 'completed'
+                                ? '✅ Completed'
+                                : '⏳ Accepted'}
                         </span>
                       </div>
 
@@ -519,6 +549,11 @@ function LabourDashboard() {
                           >
                             {actionLoading === job.id ? <span style={s.spinnerGreen} /> : '✅ Complete Work'}
                           </button>
+                        )}
+                        {job.status === 'awaiting_farmer_confirmation' && (
+                          <div style={{ color: '#facc15', fontSize: 13, fontWeight: 700 }}>
+                            ⏳ Waiting for farmer confirmation
+                          </div>
                         )}
                         {job.status === 'completed' && (
                           <div style={{ color: '#4ade80', fontSize: 13, fontWeight: 600 }}>
@@ -626,6 +661,7 @@ export default LabourDashboard
 function getStatusStyle(status) {
   if (status === 'accepted')    return { color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' }
   if (status === 'in_progress') return { color: '#60a5fa', bg: 'rgba(96,165,250,0.1)',  border: 'rgba(96,165,250,0.25)' }
+  if (status === 'awaiting_farmer_confirmation') return { color: '#facc15', bg: 'rgba(250,204,21,0.1)', border: 'rgba(250,204,21,0.25)' }
   if (status === 'completed')   return { color: '#4ade80', bg: 'rgba(74,222,128,0.1)',  border: 'rgba(74,222,128,0.25)' }
   return { color: '#71717a', bg: 'rgba(113,113,122,0.1)', border: 'rgba(113,113,122,0.25)' }
 }

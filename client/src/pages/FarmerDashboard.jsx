@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react'
 import { auth, db } from '../firebase/config'
-import { collection, addDoc, query, where, getDocs } from 'firebase/firestore'
+import { collection, addDoc, query, where, getDocs, doc, updateDoc } from 'firebase/firestore'
 import { signOut } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
@@ -26,6 +26,7 @@ const getRiskBg = (level) => {
 const getStatusStyle = (status) => {
   if (status === 'pending')   return { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)',  border: 'rgba(251,191,36,0.25)' }
   if (status === 'accepted')  return { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',  border: 'rgba(96,165,250,0.25)' }
+  if (status === 'awaiting_farmer_confirmation') return { color: '#facc15', bg: 'rgba(250,204,21,0.12)', border: 'rgba(250,204,21,0.25)' }
   if (status === 'delivered') return { color: '#4ade80', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.25)' }
   return { color: '#71717a', bg: 'rgba(113,113,122,0.12)', border: 'rgba(113,113,122,0.25)' }
 }
@@ -179,6 +180,8 @@ function FarmerDashboard() {
   const handleSubmit = async () => {
     if (!crop || !quantity || !pickup || !destination)
       return setError('All fields are required')
+    if (!selectedDriver)
+      return setError('Please select a driver for the transport request')
     setLoading(true)
     setError('')
     try {
@@ -192,6 +195,18 @@ function FarmerDashboard() {
         destination,
         status:      'pending',
         jobType:     'transport',
+        transport_type: transportType,
+        price_per_kg:   Number(pricePerKg) || 20,
+        // Full driver snapshot so it shows inside "My Requests"
+        driver: selectedDriver ? {
+          id: selectedDriver.id,
+          name: selectedDriver.name || '',
+          phone: selectedDriver.phone || '',
+          vehicleNo: selectedDriver.vehicleNo || selectedDriver.vehicleNumber || '',
+          vehicleType: selectedDriver.vehicleType || '',
+          ratePerKm: selectedDriver.ratePerKm || 12,
+          status: 'pending'
+        } : null,
         riskAnalysis: riskData ? {
           spoilage_percent: riskData.prediction.best_window.spoilage_percent,
           best_window:      riskData.prediction.best_window.window,
@@ -202,6 +217,8 @@ function FarmerDashboard() {
       setSuccess('Request posted! Provider will accept soon.')
       setCrop(''); setQuantity(''); setPickup(''); setDestination('')
       setPricePerKg(''); setRiskData(null); setMandiPrices(null)
+      setSelectedDriver(null)
+      setShowDrivers(false)
       fetchRequests()
       setActiveTab('requests')
       setTimeout(() => setSuccess(''), 4000)
@@ -236,7 +253,7 @@ function FarmerDashboard() {
           id: selectedDriver.id,
           name: selectedDriver.name || '',
           phone: selectedDriver.phone || '',
-          vehicleNo: selectedDriver.vehicleNo || '',
+          vehicleNo: selectedDriver.vehicleNo || selectedDriver.vehicleNumber || '',
           vehicleType: selectedDriver.vehicleType || '',
           ratePerKm: selectedDriver.ratePerKm || 12,
           status: 'pending'
@@ -261,12 +278,57 @@ function FarmerDashboard() {
     })
       setSuccess(`Labour request sent to ${selectedLabour?.name}!`)
       setSelectedLabour(null)
+      // User asked to remove selected parties after sending.
+      setSelectedDriver(null)
+      setShowDrivers(false)
       setTimeout(() => setSuccess(''), 4000)
     } catch (err) {
       console.error('Failed to send labour request:', err)
       setError('Failed to send labour request')
     }
     setLoading(false)
+  }
+
+  const handleFarmerConfirm = async (req) => {
+    try {
+      setLoading(true)
+      setError('')
+
+      // Labour confirmation
+      if (req.jobType === 'labour') {
+        if (!req.labourWorkDoneAt) return setError('Waiting for labour to mark work done')
+        if (req.farmerConfirmedAt) return
+
+        await updateDoc(doc(db, 'requests', req.id), {
+          status: 'completed',
+          completedAt: new Date(),
+          farmerConfirmedAt: new Date(),
+          'labour.status': 'completed'
+        })
+      }
+
+      // Driver confirmation (transport)
+      if (req.jobType === 'transport') {
+        if (!req.driverWorkDoneAt) return setError('Waiting for driver to mark work done')
+        if (req.farmerConfirmedAt) return
+
+        await updateDoc(doc(db, 'requests', req.id), {
+          status: 'delivered',
+          deliveredAt: new Date(),
+          farmerConfirmedAt: new Date(),
+          'driver.status': 'delivered'
+        })
+      }
+
+      setSuccess('Confirmed! Earnings will update now.')
+      fetchRequests()
+      setTimeout(() => setSuccess(''), 4000)
+    } catch (err) {
+      console.error('Farmer confirmation failed:', err)
+      setError('Failed to confirm work')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleLogout = async () => { await signOut(auth); navigate('/') }
@@ -814,7 +876,7 @@ function FarmerDashboard() {
                           <span style={s.requestQty}>{req.quantity} kg</span>
                         </div>
                         <span style={{ background: st.bg, color: st.color, border: `1px solid ${st.border}`, padding: '4px 12px', borderRadius: 99, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          {req.status}
+                          {req.status === 'awaiting_farmer_confirmation' ? '⏳ Awaiting Confirmation' : req.status}
                         </span>
                       </div>
                       <div style={s.requestRoute}>
@@ -848,11 +910,28 @@ function FarmerDashboard() {
                           </span>
                           <span style={{
                           ...statusChipStyle,
-                          background: req.driver.status === 'accepted'
-                          ? 'rgba(74,222,128,0.12)' : 'rgba(251,191,36,0.12)',
-                          color: req.driver.status === 'accepted' ? '#4ade80' : '#fbbf24',
+                          background:
+                            req.driver.status === 'delivered'
+                              ? 'rgba(74,222,128,0.12)'
+                              : req.driver.status === 'work_done'
+                                ? 'rgba(250,204,21,0.12)'
+                                : 'rgba(251,191,36,0.12)',
+                          color:
+                            req.driver.status === 'delivered'
+                              ? '#4ade80'
+                              : req.driver.status === 'work_done'
+                                ? '#facc15'
+                                : req.driver.status === 'accepted'
+                                  ? '#4ade80'
+                                  : '#fbbf24',
                          }}>
-                        {req.driver.status === 'accepted' ? '✓ Confirmed' : '⏳ Pending'}
+                        {req.driver.status === 'delivered'
+                          ? '✅ Delivered'
+                          : req.driver.status === 'work_done'
+                            ? '✅ Work Done'
+                            : req.driver.status === 'accepted'
+                              ? '✓ Confirmed'
+                              : '⏳ Pending'}
                       </span>
                     </div>
                     ) : (
@@ -881,6 +960,55 @@ function FarmerDashboard() {
             </span>
             </div>
               ) : null}
+
+                      {/* Farmer confirmation buttons (2-step earning) */}
+                      {req.status === 'awaiting_farmer_confirmation' &&
+                        req.farmerConfirmedAt == null &&
+                        req.jobType === 'transport' &&
+                        req.driverWorkDoneAt && (
+                          <button
+                            onClick={() => handleFarmerConfirm(req)}
+                            disabled={loading}
+                            style={{
+                              marginTop: 14,
+                              background: 'rgba(74,222,128,0.15)',
+                              border: '1px solid rgba(74,222,128,0.35)',
+                              color: '#4ade80',
+                              borderRadius: 10,
+                              padding: '10px 18px',
+                              fontSize: 13,
+                              fontWeight: 800,
+                              cursor: loading ? 'not-allowed' : 'pointer',
+                              opacity: loading ? 0.6 : 1
+                            }}
+                          >
+                            ✅ Confirm Delivery
+                          </button>
+                        )}
+
+                      {req.status === 'awaiting_farmer_confirmation' &&
+                        req.farmerConfirmedAt == null &&
+                        req.jobType === 'labour' &&
+                        req.labourWorkDoneAt && (
+                          <button
+                            onClick={() => handleFarmerConfirm(req)}
+                            disabled={loading}
+                            style={{
+                              marginTop: 14,
+                              background: 'rgba(250,204,21,0.15)',
+                              border: '1px solid rgba(250,204,21,0.35)',
+                              color: '#facc15',
+                              borderRadius: 10,
+                              padding: '10px 18px',
+                              fontSize: 13,
+                              fontWeight: 800,
+                              cursor: loading ? 'not-allowed' : 'pointer',
+                              opacity: loading ? 0.6 : 1
+                            }}
+                          >
+                            ✅ Confirm Labour Work Done
+                          </button>
+                        )}
                     </div>
                   )
                 })}

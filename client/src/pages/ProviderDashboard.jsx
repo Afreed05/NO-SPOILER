@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { auth, db } from '../firebase/config'
-import { collection, getDocs, doc, updateDoc, query, where, getDoc } from 'firebase/firestore'
+import { collection, getDocs, doc, updateDoc, query, where, getDoc, onSnapshot } from 'firebase/firestore'
 import { signOut, onAuthStateChanged } from 'firebase/auth'
 import { useNavigate } from 'react-router-dom'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
@@ -42,6 +42,7 @@ const getCoords = (name) => {
 const getStatusStyle = (status) => {
   if (status === 'pending')   return { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)',  border: 'rgba(251,191,36,0.25)' }
   if (status === 'accepted')  return { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)',  border: 'rgba(96,165,250,0.25)' }
+  if (status === 'awaiting_farmer_confirmation') return { color: '#facc15', bg: 'rgba(250,204,21,0.12)', border: 'rgba(250,204,21,0.25)' }
   if (status === 'delivered') return { color: '#4ade80', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.25)' }
   return { color: '#71717a', bg: 'rgba(113,113,122,0.12)', border: 'rgba(113,113,122,0.25)' }
 }
@@ -64,7 +65,9 @@ const onlineIcon = new L.Icon({
 function ProviderDashboard() {
   const [requests,      setRequests]      = useState([])
   const [myJobs,        setMyJobs]        = useState([])
+  const [earnings,     setEarnings]     = useState({ today: 0, total: 0, deliveredCount: 0 })
   const [loading,       setLoading]       = useState(false)
+  const [workDoneJobId, setWorkDoneJobId] = useState(null)
   const [successMsg,    setSuccessMsg]    = useState('')
   const [activeTab,     setActiveTab]     = useState('map')
   const [routeCoords,   setRouteCoords]   = useState(null)
@@ -78,6 +81,7 @@ function ProviderDashboard() {
   const [locationError, setLocationError] = useState('')
   const [locating,      setLocating]      = useState(false)
   const locationIntervalRef = useRef(null)
+  const unsubMyJobsRef = useRef(null)
 
   const navigate = useNavigate()
   const [user, setUser] = useState(auth.currentUser)
@@ -108,8 +112,42 @@ function ProviderDashboard() {
   }, [])
 
   useEffect(() => {
-    if (user) fetchMyJobs()
+    if (!user) return
+
+    const jobType = user?.role === 'labour' ? 'labour' : 'transport'
+    const q = query(
+      collection(db, 'requests'),
+      where('providerId', '==', user.uid),
+      where('jobType', '==', jobType)
+    )
+
+    if (unsubMyJobsRef.current) unsubMyJobsRef.current()
+
+    unsubMyJobsRef.current = onSnapshot(q, (snap) => {
+      setMyJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    })
+
+    return () => {
+      if (unsubMyJobsRef.current) unsubMyJobsRef.current()
+    }
   }, [user])
+
+  useEffect(() => {
+    // Provider earnings only count when farmer confirms delivery.
+    const delivered = (myJobs || []).filter(j => j.status === 'delivered')
+    const total = delivered.reduce((sum, j) => sum + (j.driverPrice || j.transportPrice || j.price || 0), 0)
+
+    const today = new Date()
+    const todayStr = today.toDateString()
+    const todayEarn = delivered
+      .filter(j => {
+        const at = j.deliveredAt?.toDate?.() || j.deliveredAt || j.completedAt
+        return at && new Date(at).toDateString() === todayStr
+      })
+      .reduce((sum, j) => sum + (j.driverPrice || j.transportPrice || j.price || 0), 0)
+
+    setEarnings({ today: todayEarn, total, deliveredCount: delivered.length })
+  }, [myJobs])
 
   // Cleanup interval on unmount
   useEffect(() => {
@@ -209,16 +247,18 @@ function ProviderDashboard() {
     // Labour bhi provider dashboard use karta hai
     // Agar labour hai toh sirf apne assigned requests dikhao
     // Agar provider hai toh saare pending requests dikhao
+    const isLabourRole = user?.role === 'labour'
     const q = query(
       collection(db, 'requests'),
-      where('status', '==', 'pending')
+      where('status', '==', 'pending'),
+      where('jobType', '==', isLabourRole ? 'labour' : 'transport')
     )
     const snap = await getDocs(q)
     const allRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
 
     // Labour ke liye — sirf wo requests jo unhe assign ki hain
     // Provider ke liye — saari pending requests
-    if (user?.role === 'labour') {
+    if (isLabourRole) {
       setRequests(allRequests.filter(r => r.labour?.id === user.uid))
     } else {
       setRequests(allRequests)
@@ -228,7 +268,12 @@ function ProviderDashboard() {
 
   const fetchMyJobs = async () => {
     try {
-      const q = query(collection(db, 'requests'), where('providerId', '==', user.uid))
+      const jobType = user?.role === 'labour' ? 'labour' : 'transport'
+      const q = query(
+        collection(db, 'requests'),
+        where('providerId', '==', user.uid),
+        where('jobType', '==', jobType)
+      )
       const snap = await getDocs(q)
       setMyJobs(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     } catch (err) { console.error(err) }
@@ -237,17 +282,20 @@ function ProviderDashboard() {
   const handleAccept = async (request) => {
     setLoading(true)
     try {
-      await updateDoc(doc(db, 'requests', request.id), {
+      const updateFields = {
         status: 'accepted',
         providerId: user.uid,
         providerEmail: user.email,
         acceptedAt: new Date(),
-        // Driver status update — snapshot already saved, sirf status update karo
-        'driver.status': 'accepted',
-      })
+        // Snapshot already saved at creation; now just sync status for the right actor.
+        ...(request.jobType === 'labour'
+          ? { 'labour.status': 'accepted' }
+          : { 'driver.status': 'accepted' }),
+      }
+      await updateDoc(doc(db, 'requests', request.id), updateFields)
       setSuccessMsg('Job accepted! Route loading...')
       setTimeout(() => setSuccessMsg(''), 4000)
-      fetchPendingRequests(); fetchMyJobs()
+      fetchPendingRequests()
       await fetchRoute(request)
       setActiveTab('map')
     } catch (err) { console.error(err) }
@@ -260,7 +308,8 @@ function ProviderDashboard() {
       const response = await axios.post('http://localhost:5000/api/ml/analyze', {
         crop: job.crop, quantity: job.quantity,
         pickup: job.pickup, destination: job.destination,
-        transport_type: 'open', price_per_kg: 20
+        transport_type: job.transport_type || 'open',
+        price_per_kg: job.price_per_kg || 20
       })
       const data = response.data
       setRouteInfo({ distance_km: data.route.distance_km, travel_hours: data.route.travel_hours, temperature: data.weather.temperature, crop: job.crop, quantity: job.quantity, pickup: job.pickup, destination: job.destination })
@@ -279,6 +328,44 @@ function ProviderDashboard() {
       setActiveJob(job)
     }
     setFetchingRoute(false)
+  }
+
+  // Driver/provider marks their side as "work done".
+  // Farmer will later confirm to finalize `status: delivered` (earnings depend on this).
+  const handleWorkDone = async (job) => {
+    if (job.jobType !== 'transport') return
+    setWorkDoneJobId(job.id)
+    try {
+      const response = await axios.post('http://localhost:5000/api/ml/analyze', {
+        crop: job.crop,
+        quantity: job.quantity,
+        pickup: job.pickup,
+        destination: job.destination,
+        transport_type: job.transport_type || 'open',
+        price_per_kg: job.price_per_kg || 20
+      })
+
+      const km = response.data?.route?.distance_km
+      const ratePerKm = job.driver?.ratePerKm || 12
+      const driverPrice = km ? Math.round(km * ratePerKm) : 0
+
+      await updateDoc(doc(db, 'requests', job.id), {
+        status: 'awaiting_farmer_confirmation',
+        driverWorkDoneAt: new Date(),
+        driverPrice,
+        'driver.status': 'work_done'
+      })
+
+      setSuccessMsg('Work done! Waiting for farmer confirmation...')
+      setTimeout(() => setSuccessMsg(''), 4000)
+      fetchPendingRequests()
+    } catch (err) {
+      console.error('Work done failed:', err)
+      setSuccessMsg('Failed to mark work done')
+      setTimeout(() => setSuccessMsg(''), 4000)
+    } finally {
+      setWorkDoneJobId(null)
+    }
   }
 
   const handleShowRoute = async (job) => { setActiveTab('map'); await fetchRoute(job) }
@@ -485,6 +572,16 @@ function ProviderDashboard() {
               <div style={s.emptyState}><div style={s.emptyIcon}>🚚</div><div style={s.emptyTitle}>No jobs yet</div><div style={s.emptySubtitle}>Accept a request to get started</div><button style={s.btnAccept} onClick={() => setActiveTab('available')}>View Available</button></div>
             ) : (
               <div style={s.list}>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+                  <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 11, color: '#52525b', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Today's Earnings</div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#facc15', marginTop: 4 }}>₹{earnings.today}</div>
+                  </div>
+                  <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 11, color: '#52525b', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Total Earnings</div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: '#4ade80', marginTop: 4 }}>₹{earnings.total}</div>
+                  </div>
+                </div>
                 {myJobs.map(job => {
                   const st = getStatusStyle(job.status)
                   const isActive = activeJob?.id === job.id
@@ -495,7 +592,9 @@ function ProviderDashboard() {
                           <span style={s.requestCrop}>{job.crop}</span>
                           <span style={s.requestQty}>{job.quantity} kg</span>
                         </div>
-                        <span style={{ background: st.bg, color: st.color, border: `1px solid ${st.border}`, padding: '3px 12px', borderRadius: 99, fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>{job.status}</span>
+                        <span style={{ background: st.bg, color: st.color, border: `1px solid ${st.border}`, padding: '3px 12px', borderRadius: 99, fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>
+                          {job.status === 'awaiting_farmer_confirmation' ? '⏳ Waiting Farmer' : job.status}
+                        </span>
                       </div>
                       <div style={s.requestRoute}>
                         <span style={s.routeFrom}>📍 {job.pickup}</span>
@@ -512,6 +611,20 @@ function ProviderDashboard() {
                         <button style={fetchingRoute ? { ...s.btnRoute, opacity: 0.6 } : s.btnRoute} onClick={() => handleShowRoute(job)} disabled={fetchingRoute}>
                           {fetchingRoute && activeJob?.id === job.id ? <><span style={s.spinnerBlue} /> Loading...</> : '🗺️ Show Route on Map'}
                         </button>
+                        {job.jobType === 'transport' && job.status === 'accepted' && (
+                          <button
+                            style={workDoneJobId === job.id ? { ...s.btnAccept, opacity: 0.6 } : s.btnAccept}
+                            onClick={() => handleWorkDone(job)}
+                            disabled={workDoneJobId === job.id}
+                          >
+                            {workDoneJobId === job.id ? <span style={s.spinnerGreen} /> : '✅ Work Done'}
+                          </button>
+                        )}
+                        {job.jobType === 'transport' && job.status === 'awaiting_farmer_confirmation' && (
+                          <div style={{ color: '#facc15', fontSize: 13, fontWeight: 700 }}>
+                            ⏳ Waiting for farmer confirmation
+                          </div>
+                        )}
                         {isActive && routeInfo && (
                           <div style={s.jobRouteChips}>
                             <span style={s.routeChip}>📏 {routeInfo.distance_km} km</span>
