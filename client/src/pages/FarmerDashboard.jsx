@@ -60,12 +60,22 @@ const [selectedDriver, setSelectedDriver] = useState(null)
 const [selectedLabour, setSelectedLabour] = useState(null)
 const [showDrivers, setShowDrivers]       = useState(false)
 const [showLabour, setShowLabour]         = useState(false)
+const [onlineDrivers, setOnlineDrivers] = useState([])
+const [farmerLocation, setFarmerLocation] = useState(null)
   const [activeTab, setActiveTab] = useState('form') // 'form' | 'requests'
 
   const navigate = useNavigate()
   const user = auth.currentUser
 
-  useEffect(() => { fetchRequests() }, [])
+  // DHUNDHO:
+useEffect(() => { fetchRequests() }, [])
+
+// REPLACE WITH:
+useEffect(() => {
+  fetchRequests()
+  getFarmerLocation()
+  fetchOnlineDrivers()
+}, [])
 
   const fetchRequests = async () => {
     try {
@@ -75,6 +85,50 @@ const [showLabour, setShowLabour]         = useState(false)
       setRequests(data)
     } catch (err) { console.error(err) }
   }
+  // Online drivers fetch + sort by distance from farmer
+const fetchOnlineDrivers = async () => {
+  try {
+    const q = query(
+      collection(db, 'users'),
+      where('role', '==', 'provider'),
+      where('isOnline', '==', true)
+    )
+    const snap = await getDocs(q)
+    let drivers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+    // Agar farmer ka location hai, sort by distance
+    if (farmerLocation) {
+      drivers = drivers.map(driver => {
+        if (!driver.location) return { ...driver, distanceKm: 9999 }
+        const dist = getDistanceKm(
+          farmerLocation.lat, farmerLocation.lng,
+          driver.location.lat, driver.location.lng
+        )
+        return { ...driver, distanceKm: Math.round(dist) }
+      }).sort((a, b) => a.distanceKm - b.distanceKm)
+    }
+    setOnlineDrivers(drivers)
+  } catch (err) { console.error('Online drivers fetch failed:', err) }
+}
+
+// Haversine formula — distance between 2 GPS points in km
+const getDistanceKm = (lat1, lng1, lat2, lng2) => {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat/2) ** 2 +
+    Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLng/2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+}
+
+// Farmer ka location lo (optional — for sorting)
+const getFarmerLocation = () => {
+  if (!navigator.geolocation) return
+  navigator.geolocation.getCurrentPosition(
+    pos => setFarmerLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+    () => {} // silent fail — sorting won't work but drivers still show
+  )
+}
   // Drivers fetch — same vehicleType as selected transport
 const fetchNearbyDrivers = async (vType) => {
   try {
@@ -708,6 +762,92 @@ const fetchNearbyLabours = async () => {
             )}
           </div>
         )}
+
+        {/* ══ ONLINE DRIVERS MAP ══ */}
+<div style={s.card}>
+  <div style={s.cardHeader}>
+    <span style={s.cardIcon}>🟢</span>
+    <div>
+      <div style={s.cardTitle}>Online Drivers Near You</div>
+      <div style={s.cardSubtitle}>
+        {onlineDrivers.length > 0
+          ? `${onlineDrivers.length} driver${onlineDrivers.length > 1 ? 's' : ''} online — sorted nearest first`
+          : 'No drivers online right now'}
+      </div>
+    </div>
+    <button
+      onClick={fetchOnlineDrivers}
+      style={{ marginLeft: 'auto', background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.2)', color: '#86efac', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+    >
+      🔄 Refresh
+    </button>
+  </div>
+
+  {onlineDrivers.length === 0 ? (
+    <div style={{ textAlign: 'center', padding: '32px', color: '#52525b', fontSize: 13 }}>
+      Drivers dikhenge jab wo "Go Online" karenge
+    </div>
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '0 4px' }}>
+      {onlineDrivers.map((driver, i) => (
+        <div key={driver.id} style={{
+          background: i === 0 ? 'rgba(74,222,128,0.05)' : 'rgba(255,255,255,0.03)',
+          border: `1px solid ${i === 0 ? 'rgba(74,222,128,0.2)' : 'rgba(255,255,255,0.07)'}`,
+          borderRadius: 14, padding: '14px 16px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Rank badge */}
+            <div style={{
+              width: 32, height: 32, borderRadius: '50%',
+              background: i === 0 ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 14, fontWeight: 800,
+              color: i === 0 ? '#4ade80' : '#71717a',
+            }}>
+              {i + 1}
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: '#f4f4f5', fontWeight: 700, fontSize: 14 }}>{driver.name}</span>
+                {/* Online pulse dot */}
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#4ade80', display: 'inline-block' }} />
+              </div>
+              <div style={{ color: '#52525b', fontSize: 12, marginTop: 3, display: 'flex', gap: 12 }}>
+                <span>
+                  {driver.vehicleType === 'refrigerated' ? '❄️ Refrigerated' :
+                   driver.vehicleType === 'closed'       ? '📦 Closed Truck' : '🚛 Open Truck'}
+                </span>
+                {driver.vehicleNumber && <span>· {driver.vehicleNumber}</span>}
+                {driver.experience    && <span>· {driver.experience} yrs exp</span>}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ color: '#4ade80', fontWeight: 700, fontSize: 15 }}>
+              ₹{driver.ratePerKm || 12}/km
+            </div>
+            {driver.distanceKm && driver.distanceKm < 9999 ? (
+              <div style={{ color: i === 0 ? '#86efac' : '#52525b', fontSize: 12, marginTop: 3 }}>
+                📍 ~{driver.distanceKm} km away
+              </div>
+            ) : (
+              <div style={{ color: '#3f3f46', fontSize: 12, marginTop: 3 }}>
+                📍 Location updating...
+              </div>
+            )}
+            {driver.phone && (
+              <div style={{ color: '#3f3f46', fontSize: 11, marginTop: 2 }}>
+                📞 {driver.phone}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 
         {/* ════════════════════════════════════════════ */}
         {/* TAB: MY REQUESTS                             */}

@@ -65,7 +65,7 @@ const getRoute = async (origin, destination) => {
     // OpenRouteService directions API
     // coordinates format: [[lng, lat], [lng, lat]]
     const response = await axios.post(
-      'https://api.openrouteservice.org/v2/directions/driving-car',
+      'https://router.project-osrm.org/route/v1/driving/{lng,lat};{lng,lat}?overview=full&geometries=geojson',
       {
         coordinates: [originCoords, destCoords]
       },
