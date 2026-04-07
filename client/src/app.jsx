@@ -9,6 +9,7 @@ import Signup from './pages/Signup'
 import FarmerDashboard from './pages/FarmerDashboard'
 import ProviderDashboard from './pages/ProviderDashboard'
 import LabourDashboard from './pages/LabourDashboard'
+// App component me user + role dono ko track karna hai, aur loading state bhi rakhni hai
 
 function App() {
   const [user, setUser]       = useState(null)

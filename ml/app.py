@@ -1,11 +1,3 @@
-# ============================================================
-# app.py — Flask ML Server (FIXED)
-# Changes:
-# 1. Risk levels fixed: LOW < 5%, MEDIUM 5-10%, HIGH > 10%
-# 2. Windows reduced to 4 (next 24 hours only)
-# 3. Selected date/time se windows calculate hote hain
-# ============================================================
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pickle
@@ -31,18 +23,11 @@ def load_models():
 
 model, crop_encoder, transport_encoder = load_models()
 
-# ----------------------------------------
-# Risk level — FIXED thresholds
-# ----------------------------------------
 def get_risk_level(spoilage):
-    if spoilage < 5:   return 'low'
-    if spoilage < 10:  return 'medium'
+    if spoilage < 5:  return 'low'
+    if spoilage < 10: return 'medium'
     return 'high'
 
-# ----------------------------------------
-# Temperature adjustment by hour of day
-# Same logic as Node ml.js
-# ----------------------------------------
 def get_temp_offset(hour):
     if 4  <= hour < 7:  return -5
     if 7  <= hour < 10: return -2
@@ -52,15 +37,28 @@ def get_temp_offset(hour):
     if 19 <= hour < 22: return -1
     return -3
 
-# ----------------------------------------
-# Predict spoilage for given inputs
-# ----------------------------------------
+# ── NEW: Humidity varies through the day ──────────────────
+def get_humidity_offset(hour):
+    if 4  <= hour < 8:  return +12   # early morning — most humid
+    if 8  <= hour < 11: return +6    # morning
+    if 11 <= hour < 15: return -10   # noon — driest
+    if 15 <= hour < 18: return -6    # afternoon
+    if 18 <= hour < 21: return +4    # evening
+    return +9                         # night — humid
+
+# ── NEW: Traffic affects travel time = more time in heat ──
+def get_traffic_multiplier(hour):
+    if 8  <= hour < 10: return 1.4   # morning rush — slow
+    if 17 <= hour < 20: return 1.35  # evening rush — slow
+    if 0  <= hour < 5:  return 0.8   # night — fastest
+    if 5  <= hour < 7:  return 0.85  # early morning — light
+    return 1.0                        # normal
+
 def predict_spoilage(crop, travel_hours, temperature, humidity, transport_type):
     try:
         crop_enc = crop_encoder.transform([crop])[0]
     except ValueError:
         crop_enc = crop_encoder.transform(['Tomato'])[0]
-
     try:
         transport_enc = transport_encoder.transform([transport_type])[0]
     except ValueError:
@@ -70,27 +68,19 @@ def predict_spoilage(crop, travel_hours, temperature, humidity, transport_type):
     prediction = model.predict(features)[0]
     return round(float(prediction), 2)
 
-# ----------------------------------------
-# Health check
-# ----------------------------------------
 @app.route('/')
 def home():
     return jsonify({"message": "ML Server is running!", "model_loaded": model is not None})
 
-# ----------------------------------------
-# POST /predict — single prediction
-# ----------------------------------------
 @app.route('/predict', methods=['POST'])
 def predict():
     if model is None:
         return jsonify({"error": "Model not loaded. Run train.py first"}), 500
-
     data = request.get_json()
     required = ['crop', 'travel_hours', 'temperature', 'humidity', 'transport_type']
     for field in required:
         if field not in data:
             return jsonify({"error": f"Missing field: {field}"}), 400
-
     spoilage = predict_spoilage(
         crop=data['crop'],
         travel_hours=float(data['travel_hours']),
@@ -98,37 +88,28 @@ def predict():
         humidity=float(data['humidity']),
         transport_type=data['transport_type']
     )
-
     return jsonify({
         "crop": data['crop'],
         "spoilage_percent": spoilage,
         "risk_level": get_risk_level(spoilage)
     })
 
-# ----------------------------------------
-# POST /optimize — 4 windows, next 24 hours
-# FIXED: respects dispatch_date and dispatch_time
-# ----------------------------------------
 @app.route('/optimize', methods=['POST'])
 def optimize():
     if model is None:
         return jsonify({"error": "Model not loaded. Run train.py first"}), 500
 
     data = request.get_json()
-
     crop           = data.get('crop', 'Tomato')
     travel_hours   = float(data.get('travel_hours', 4))
     base_temp      = float(data.get('temperature', 30))
-    humidity       = float(data.get('humidity', 65))
+    base_humidity  = float(data.get('humidity', 65))
     transport_type = data.get('transport_type', 'open')
     quantity_kg    = float(data.get('quantity_kg', 100))
     price_per_kg   = float(data.get('price_per_kg', 20))
-    dispatch_date  = data.get('dispatch_date', None)   # "2026-03-27"
-    dispatch_time  = data.get('dispatch_time', None)   # "06:00"
+    dispatch_date  = data.get('dispatch_date', None)
+    dispatch_time  = data.get('dispatch_time', None)
 
-    # ----------------------------------------
-    # Starting point — selected date/time ya abhi
-    # ----------------------------------------
     if dispatch_date and dispatch_time:
         try:
             start_dt = datetime.strptime(f"{dispatch_date} {dispatch_time}", "%Y-%m-%d %H:%M")
@@ -137,17 +118,13 @@ def optimize():
     else:
         start_dt = datetime.now()
 
-    # ----------------------------------------
-    # 4 windows — har 6 ghante
-    # Start from selected time, not always "Today 6 AM"
-    # ----------------------------------------
     windows = []
 
-    for i in range(6): # 6 windows = next 36 hours, every 6 hours
-        window_dt   = start_dt + timedelta(hours=i * 6)
-        hour        = window_dt.hour
+    for i in range(6):
+        window_dt = start_dt + timedelta(hours=i * 6)
+        hour      = window_dt.hour
 
-        # Descriptive label
+        # Label
         day_str = "Today" if window_dt.date() == datetime.now().date() else "Tomorrow"
         if   hour == 0:  time_str = "12 AM"
         elif hour < 12:  time_str = f"{hour} AM"
@@ -155,41 +132,41 @@ def optimize():
         else:            time_str = f"{hour - 12} PM"
         label = f"{day_str} {time_str}"
 
-        # Temperature at this specific window
-        temp_offset = get_temp_offset(hour)
-        temp        = round(base_temp + temp_offset, 1)
+        # ── Adjust all 3 variables per window ──────────────
+        temp     = round(base_temp + get_temp_offset(hour), 1)
+        humidity = round(min(95, max(30, base_humidity + get_humidity_offset(hour))), 1)
+        t_hours  = round(travel_hours * get_traffic_multiplier(hour), 2)
 
-        spoilage    = predict_spoilage(crop, travel_hours, temp, humidity, transport_type)
+        spoilage    = predict_spoilage(crop, t_hours, temp, humidity, transport_type)
         loss_kg     = round((spoilage / 100) * quantity_kg, 2)
         loss_rupees = round(loss_kg * price_per_kg, 2)
 
         windows.append({
-            "window":          label,
-            "hour":            hour,
-            "temperature":     temp,
+            "window":           label,
+            "hour":             hour,
+            "temperature":      temp,
+            "humidity":         humidity,
+            "travel_hours":     t_hours,
             "spoilage_percent": spoilage,
-            "loss_kg":         loss_kg,
-            "loss_rupees":     loss_rupees,
-            "risk_level":      get_risk_level(spoilage)
+            "loss_kg":          loss_kg,
+            "loss_rupees":      loss_rupees,
+            "risk_level":       get_risk_level(spoilage)
         })
 
-    # Best window = lowest spoilage among 4
-    best_window = min(windows, key=lambda x: x['spoilage_percent'])
-
-    # Savings = first window loss - best window loss
+    best_window  = min(windows, key=lambda x: x['spoilage_percent'])
     worst_window = max(windows, key=lambda x: x['spoilage_percent'])
-    savings = round(worst_window['loss_rupees'] - best_window['loss_rupees'], 2)
+    savings      = round(worst_window['loss_rupees'] - best_window['loss_rupees'], 2)
     if savings < 0:
         savings = 0
 
     return jsonify({
-        "crop":             crop,
-        "quantity_kg":      quantity_kg,
-        "all_windows":      windows,
-        "best_window":      best_window,
-        "worst_window":     worst_window,
-        "savings_rupees":   savings,
-        "recommendation":   f"Dispatch at {best_window['window']} — save ₹{savings} vs worst time"
+        "crop":           crop,
+        "quantity_kg":    quantity_kg,
+        "all_windows":    windows,
+        "best_window":    best_window,
+        "worst_window":   worst_window,
+        "savings_rupees": savings,
+        "recommendation": f"Dispatch at {best_window['window']} — save ₹{savings} vs worst time"
     })
 
 if __name__ == '__main__':
